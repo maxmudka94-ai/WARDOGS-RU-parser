@@ -50,12 +50,31 @@ async def _fetch_helix_user(session: aiohttp.ClientSession, channel: str):
 
 async def _fetch_gql(session: aiohttp.ClientSession, channel: str):
     url = "https://gql.twitch.tv/gql"
-    payload = {"query": f'query{{user(login:"{channel}"){{stream{{id type title}} broadcastSettings{{isLive}} displayName login profileImageURL}}}}'}
+    # Twitch removed BroadcastSettings.isLive from the public schema. The
+    # stream object already tells us whether the channel is live, so do not
+    # request the removed field (it made the whole fallback return an error).
+    payload = {
+        "operationName": "ChannelStatus",
+        "variables": {"login": channel},
+        "query": """
+            query ChannelStatus($login: String!) {
+              user(login: $login) {
+                stream { id type title }
+                displayName
+                login
+                profileImageURL(width: 300)
+              }
+            }
+        """,
+    }
     headers = {"Client-Id": _GQL_CLIENT_ID, "Content-Type": "application/json"}
     async with session.post(url, json=payload, headers=headers, timeout=aiohttp.ClientTimeout(total=12)) as r:
         if r.status != 200:
             raise RuntimeError(f"gql {r.status}")
         data = await r.json()
+        if data.get("errors"):
+            message = data["errors"][0].get("message", "unknown GraphQL error")
+            raise RuntimeError(f"gql: {message}")
         u = (data.get("data") or {}).get("user")
         if not u:
             return None
@@ -101,8 +120,10 @@ async def fetch_status(session: aiohttp.ClientSession, channel: str):
     # Нет Helix стрима — пробуем GQL (оффлайн vs live без деталей)
     try:
         return await _fetch_gql(session, channel)
-    except Exception:
-        return None
+    except Exception as e:
+        # Keep API errors separate from a normal offline result (None). The
+        # caller can then avoid announcing a false "stream ended" event.
+        raise RuntimeError(f"Twitch status unavailable for {channel}: {e}") from e
 
 async def fetch_user_avatar(session: aiohttp.ClientSession, channel: str) -> str | None:
     u = await _fetch_helix_user(session, channel)

@@ -22,6 +22,22 @@ async def load_cogs():
         except Exception as e:
             print(f"[cog] ошибка {cog}: {e}")
 
+
+@bot.event
+async def setup_hook():
+    """Load extensions and sync commands once, before the first READY event."""
+    await load_cogs()
+    bot.tree.add_command(twitch_group)
+    if config.GUILD_ID:
+        guild = discord.Object(id=config.GUILD_ID)
+        bot.tree.copy_global_to(guild=guild)
+        synced = await bot.tree.sync(guild=guild)
+        print(f"[ready] синхронизировано команд в guild {config.GUILD_ID}: {len(synced)}")
+    else:
+        synced = await bot.tree.sync()
+        print(f"[ready] глобально синхронизировано команд: {len(synced)}")
+
+
 live_state: dict[str, bool] = {}
 last_title: dict[str, str] = {}
 live_messages: dict[str, tuple[int, int]] = {}
@@ -260,17 +276,8 @@ async def twitch_test(interaction: discord.Interaction):
 @bot.event
 async def on_ready():
     print(f"[ready] {bot.user} — парсер Twitch запущен: {', '.join(config.TWITCH_CHANNELS) or '—'}")
-    try:
-        await load_cogs()
-    except Exception:
-        pass
-    try:
-        bot.tree.add_command(twitch_group)
-        await bot.tree.sync()
-        print("[ready] /twitch + Перевести синхронизированы")
-    except Exception as e:
-        print(f"[ready] sync failed: {e}")
-    bot.loop.create_task(poll_loop())
+    if not hasattr(bot, "_poll_task") or bot._poll_task.done():
+        bot._poll_task = asyncio.create_task(poll_loop())
 
 async def poll_loop():
     await bot.wait_until_ready()

@@ -13,9 +13,10 @@ TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET", "").strip()
 TWITCH_CHANNELS = [s.strip().lower().lstrip("@") for s in os.getenv("TWITCH_CHANNELS", "").split(",") if s.strip()]
 TWITCH_POLL_SECONDS = max(30, int(os.getenv("TWITCH_POLL_SECONDS", "60") or 60))
 
-# Ручной + автоматический перевод (как в discord-bot-new) — через Gemini
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip() or "AQ.Ab8RN6JRH5FJEn7DBPJMYH97nrhBmmgBT1QLkCVQn_eMnuQYdg"
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip()
+# Ручной + автоматический перевод — через Gemini.
+# Не храним ключ в коде: ключ из архива оказался недействительным и мог утечь.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip() or "gemini-2.5-flash"
 TRANSLATE_TARGET = os.getenv("TRANSLATE_TARGET", "ru").strip() or "ru"
 TRANSLATE_CHANNELS = [int(x.strip()) for x in os.getenv("TRANSLATE_CHANNELS", "").split(",") if x.strip()]
 
@@ -25,3 +26,5 @@ if not TWITCH_CHANNELS:
     print("[config] TWITCH_CHANNELS пуст")
 if not ANNOUNCE_CHANNEL_ID:
     print("[config] ANNOUNCE_CHANNEL_ID пуст")
+if not GEMINI_API_KEY:
+    print("[config] GEMINI_API_KEY пуст — перевод отключён")

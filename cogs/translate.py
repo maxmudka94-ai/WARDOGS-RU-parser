@@ -1,9 +1,35 @@
+import logging
 import time
+
 import discord
 from discord import app_commands
 from discord.ext import commands
+
 import config
 from translator import async_translate_text
+
+log = logging.getLogger("translate")
+DISCORD_LIMIT = 1900
+
+
+def _split_for_discord(text: str, limit: int = DISCORD_LIMIT) -> list[str]:
+    """Split a translation into sendable chunks without splitting words."""
+    text = text.strip()
+    if not text:
+        return []
+    chunks: list[str] = []
+    while len(text) > limit:
+        cut = text.rfind("\n", 0, limit + 1)
+        if cut < limit // 2:
+            cut = text.rfind(" ", 0, limit + 1)
+        if cut < limit // 2:
+            cut = limit
+        chunks.append(text[:cut].rstrip())
+        text = text[cut:].lstrip()
+    if text:
+        chunks.append(text)
+    return chunks
+
 
 def _message_text(message: discord.Message) -> str:
     parts: list[str] = []
@@ -22,8 +48,10 @@ def _message_text(message: discord.Message) -> str:
             parts.append("\n\n".join(emb_parts))
     return "\n\n".join(parts).strip()
 
+
 def _attachment_files(message: discord.Message) -> list[discord.Attachment]:
     return list(message.attachments)[:10]
+
 
 @app_commands.context_menu(name="Перевести")
 async def translate_context(interaction: discord.Interaction, message: discord.Message):
@@ -34,13 +62,23 @@ async def translate_context(interaction: discord.Interaction, message: discord.M
     await interaction.response.defer(ephemeral=True)
     translated = await async_translate_text(text, config.TRANSLATE_TARGET)
     if not translated:
-        await interaction.followup.send("❌ Не удалось перевести (Gemini).", ephemeral=True)
+        await interaction.followup.send(
+            "❌ Не удалось перевести. Проверь GEMINI_API_KEY и GEMINI_MODEL в .env.",
+            ephemeral=True,
+        )
         return
+
     files = _attachment_files(message)
-    if files:
-        await interaction.followup.send(f"**Перевод:**\n{translated}", files=files)
-    else:
-        await interaction.followup.send(f"**Перевод:**\n{translated}")
+    try:
+        for index, chunk in enumerate(_split_for_discord(translated)):
+            kwargs = {"ephemeral": True}
+            if index == 0 and files:
+                kwargs["files"] = files
+            prefix = "**Перевод:**\n" if index == 0 else ""
+            await interaction.followup.send(f"{prefix}{chunk}", **kwargs)
+    except discord.HTTPException:
+        log.exception("Не удалось отправить ручной перевод")
+
 
 class TranslateCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
@@ -71,32 +109,37 @@ class TranslateCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
+        # Do not translate bot/webhook messages: this prevents translation loops.
+        if message.author.bot:
+            return
         if message.channel.id not in config.TRANSLATE_CHANNELS:
             return
         if message.id in self._sent_ids:
             return
         if message.id in self._processed_ids or message.id in self._processing:
             return
+
         self._processing.add(message.id)
         try:
             text = _message_text(message)
             if not text:
                 return
             translated = await async_translate_text(text, config.TRANSLATE_TARGET)
-            if not translated:
+            if not translated or translated.strip().lower() == text.strip().lower():
                 return
-            if translated.strip().lower() == text.strip().lower():
-                return
+
             files = _attachment_files(message)
-            if files:
-                sent = await message.channel.send(translated, files=files)
-            else:
-                sent = await message.channel.send(translated)
-            if sent:
-                self._remember(sent.id)
-                self._remember_processed(message.id)
+            for index, chunk in enumerate(_split_for_discord(translated)):
+                kwargs = {"files": files} if index == 0 and files else {}
+                sent = await message.channel.send(chunk, **kwargs)
+                if sent:
+                    self._remember(sent.id)
+            self._remember_processed(message.id)
+        except discord.HTTPException:
+            log.exception("Не удалось отправить автоматический перевод")
         finally:
             self._processing.discard(message.id)
+
 
 async def setup(bot: commands.Bot):
     bot.tree.add_command(translate_context)
